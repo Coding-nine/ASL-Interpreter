@@ -1,45 +1,203 @@
-# ASL Translator — Smart Glove + 3D Unity Hand
+# ASL Interpreter
 
-A prototype sign-language handshape visualizer built around an ESP32, an MPU9250 IMU, ten flex sensors, a Python serial-to-UDP bridge, and a Unity 3D hand model.
+**A smart glove that mirrors your hand in 3D and tries to recognise ASL letters.**
+Ten flex sensors and an IMU on an ESP32 stream hand pose over USB to a Python bridge, which forwards it to a Unity scene where a 3D hand moves in real time.
 
-> **Project status:** recovered prototype; source inspected, but end-to-end hardware operation has not been re-tested. The existing recognition logic has known limitations documented below. Do not describe it as a complete or clinically/educationally validated ASL translator.
+![Status](https://img.shields.io/badge/status-prototype-orange)
+![Unity](https://img.shields.io/badge/Unity-6000.6.2f1-black?logo=unity)
+![Python](https://img.shields.io/badge/Python-3-blue?logo=python&logoColor=white)
+![ESP32](https://img.shields.io/badge/ESP32-Arduino-teal)
 
-## System architecture
+> [!WARNING]
+> **Prototype, not a finished translator.** This is a recovered project that has not been re-tested end to end since recovery: the Unity project hasn't been re-opened, the scripts haven't been recompiled, and the glove hasn't been re-run. Letter recognition is rough (see [Known limitations](#known-limitations)) and has not been validated for real-world or educational use.
+
+<!--
+  Add a screenshot or GIF of the Unity hand moving with the glove here, e.g.:
+  ![Demo](Documentation/screenshots/demo.gif)
+-->
+
+## Contents
+
+- [How it works](#how-it-works)
+- [What you need](#what-you-need)
+- [Quick start](#quick-start)
+- [Controls](#controls)
+- [Data format](#data-format)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [Troubleshooting](#troubleshooting)
+- [Repository layout](#repository-layout)
+- [License](#license)
+
+## How it works
 
 ```mermaid
-flowchart TD
-    A[10 flex sensors] --> B[ESP32 ADC]
-    C[MPU9250 IMU] --> D[ESP32 I2C]
-    B --> E[Arduino sketch]
-    D --> E
-    E -->|USB serial, 115200 baud| F[Python bridge]
-    F -->|UDP 127.0.0.1:5005| G[Unity HandUDPReceiver]
-    G --> H[HandController]
-    H --> I[3D hand bones]
-    G --> J[Wrist orientation]
-    K[ASLTranslator] --> L[ASLUIController]
-    H --> K
-    L --> M[Detected-letter UI]
+flowchart LR
+    A[10 flex sensors] --> B[ESP32]
+    C[MPU9250 IMU] --> B
+    B -->|USB serial<br/>115200 baud| D[Python bridge]
+    D -->|UDP<br/>127.0.0.1:5005| E[Unity]
+    E --> F[3D hand + wrist rotation]
+    E --> G[ASL letter detection + UI]
 ```
 
-1. The ESP32 reads the MPU9250 accelerometer/gyroscope and ten flex-sensor voltage dividers.
-2. The Madgwick IMU filter estimates orientation and the sketch emits four quaternion components plus ten flex-sensor resistance values.
-3. Python reads each serial line and forwards the same comma-separated payload as a UDP datagram.
-4. Unity listens on UDP port `5005`, parses the 14 fields, updates wrist orientation and finger-angle values, and animates the hand model.
-5. `ASLTranslator` compares the current finger-angle values with hard-coded conditions. `ASLUIController` appends newly detected letters while translation is enabled.
+| Stage | What happens |
+| --- | --- |
+| **Glove (ESP32)** | Reads the MPU9250 and ten flex-sensor voltage dividers. A Madgwick filter turns IMU data into a quaternion, and flex readings are converted to resistance. |
+| **Bridge (Python)** | Reads each serial line and forwards it unchanged as a UDP packet. |
+| **Unity** | Listens on UDP port `5005`, parses 14 values per packet, rotates the wrist, bends the finger bones, and checks the finger angles against hard-coded letter rules. |
+
+## What you need
+
+**Hardware**
+
+- ESP32 development board supported by the Arduino IDE
+- MPU9250 IMU
+- 10 flex sensors, plus the fixed resistors for their voltage dividers (values and wiring in [Hardware-and-Dependencies.md](Documentation/Hardware-and-Dependencies.md))
+- USB **data** cable (charge-only cables won't show up as a serial port)
+
+**Software**
+
+| Tool | Version |
+| --- | --- |
+| Arduino IDE | any recent version, with ESP32 board support |
+| A library providing `MadgwickAHRS.h` | exact package not recorded, see [DEPENDENCIES.md](Arduino/DEPENDENCIES.md) |
+| Python | 3.x |
+| Unity Editor | **6000.6.2f1** |
+| OS | Windows (the text-to-speech script uses `System.Speech`) |
+
+## Quick start
+
+Run the pieces in this order: **Unity first**, so its UDP listener is ready before data arrives.
+
+### 1. Flash the ESP32
+
+1. Open `Arduino/sketch_feb1a.ino` in the Arduino IDE.
+2. Install a Madgwick filter library that provides `MadgwickAHRS.h`.
+3. Select your ESP32 board and its serial port, then upload.
+4. Open the Serial Monitor at **115200 baud** to confirm you see lines of 14 numbers, then **close it**. Only one program can use the serial port at a time.
+
+### 2. Start the Unity scene
+
+1. In Unity Hub, **Add** the `Unity/` folder as an existing project and open it with editor `6000.6.2f1`.
+2. Let Unity import everything (first open takes a while; it regenerates `Library/`).
+3. Open `Assets/Scenes/SampleScene.unity` and press **Play**.
+
+### 3. Run the Python bridge
+
+From the repository root:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
+python -m pip install -r Python/requirements.txt
+```
+
+Open `Python/arduino_to_udp.py` and set `SERIAL_PORT = "COM5"` to your ESP32's port (check Device Manager on Windows). Then:
+
+```bash
+python Python/arduino_to_udp.py
+```
+
+The hand in Unity should now follow your glove. Press `C` in the Game view to set the current wrist pose as neutral.
+
+## Controls
+
+| Key | Action |
+| --- | --- |
+| `C` | Calibrate the current wrist orientation as neutral |
+| `Q` | Start collecting detected letters |
+| `E` | Stop collecting letters |
+| `W` `A` `S` `D` | Move the camera |
+| Right mouse button (hold) | Look around |
+| Left Shift | Move the camera faster |
+
+> The on-screen **Start/Stop** buttons have no click handlers yet. Use `Q` and `E`.
+
+## Data format
+
+Every serial line and UDP packet is one newline-terminated line of **14 comma-separated numbers**:
+
+```text
+q0,q1,q2,q3, thumbMCP,thumbPIP, indexMCP,indexPIP, middleMCP,middlePIP, ringMCP,ringPIP, pinkyMCP,pinkyPIP
+```
+
+| Fields | Meaning |
+| --- | --- |
+| `q0` to `q3` | Orientation quaternion from the Madgwick filter |
+| the other 10 | Flex-sensor **resistance in ohms** (not raw ADC counts) |
+
+- Serial: 115200 baud. UDP: `127.0.0.1`, port `5005`.
+- Unity re-orders the quaternion components when it reads them. Don't change that mapping unless you are deliberately recalibrating the IMU axes and will re-test.
+
+More detail: [Architecture-and-Protocol.md](Documentation/Architecture-and-Protocol.md).
+
+## Known limitations
+
+This is what is known to be broken or unfinished in the recovered code.
+
+**Letter recognition**
+
+| Issue | Effect |
+| --- | --- |
+| Thumb input is disabled: the two thumb `ApplyFingerAngle` calls in `HandUDPReceiver.cs` are commented out | The thumb never moves, and letters that depend on thumb state can't be detected from live data |
+| `ASLTranslator.cs` has identical rules for C/O, H/U and R/V | O, U and V can never be returned (the first match wins) |
+| J and Z are not implemented | The classifier only checks static finger angles, not motion |
+| Letters are logged continuously, even when collection is stopped | Noisy console output |
+| A repeated letter is only added if it differs from the previous one, and that state is never reset | Double letters ("LL") can't be typed |
+
+**Firmware and bridge**
+
+| Issue | Effect |
+| --- | --- |
+| Madgwick filter is started at 50 Hz but the loop runs about every 10 ms (about 100 Hz) | Orientation may drift or react at the wrong speed |
+| Python bridge is hard-coded to `COM5`, doesn't check packets, and doesn't reconnect | Unplugging the glove means restarting the script |
+
+**Unity**
+
+| Issue | Effect |
+| --- | --- |
+| UDP data is received and applied on a background thread, and all exceptions are swallowed | Faults are silent and hard to debug |
+| Text-to-speech (`WindowsTTS.cs`) is Windows-only and isn't called by the letter UI | Speech output doesn't happen yet |
+| Start/Stop UI buttons have no handlers | Only the keyboard shortcuts work |
+
+## Roadmap
+
+Rough order of what would make this genuinely usable:
+
+- [ ] Re-test the full pipeline with the real glove and confirm each flex channel changes when bent
+- [ ] Re-enable thumb control in `HandUDPReceiver.cs` and calibrate it
+- [ ] Fix the duplicate C/O, H/U and R/V rules, then test every supported letter
+- [ ] Read the serial port from a command-line argument and validate the 14-field packets
+- [ ] Add a fake-data sender so Unity can be tested without the glove
+- [ ] Marshal received data onto Unity's main thread and log exceptions
+- [ ] Reset the last-letter state, wire up the Start/Stop buttons, and call the speech output
+- [ ] Add motion-based detection for J and Z
+- [ ] Add a wiring diagram and screenshots to `Documentation/`
+
+## Troubleshooting
+
+| Problem | Things to check |
+| --- | --- |
+| Python says the port can't be opened | Close the Arduino Serial Monitor; confirm `SERIAL_PORT` matches Device Manager; try another USB cable |
+| Unity hand doesn't move | Is Unity in Play mode? Is the bridge running and printing? Did you start Unity **before** the bridge? Is anything else using UDP port `5005`? |
+| No serial port appears | The USB cable may be charge-only; install the USB driver for your ESP32 board |
+| Finger values look wrong or jumpy | Check the divider resistor values and wiring against the hardware doc; confirm each channel separately |
+| Hand is rotated oddly | Press `C` with your wrist in a neutral pose to calibrate |
+| Scripts won't compile in Unity | Confirm you're on editor `6000.6.2f1` and let package import finish |
 
 ## Repository layout
 
 ```text
-ASL-Translator/
+ASL-Interpreter/
 ├── Arduino/
-│   ├── sketch_feb1a.ino
+│   ├── sketch_feb1a.ino          # ESP32 firmware
 │   └── DEPENDENCIES.md
 ├── Python/
-│   ├── arduino_to_udp.py
+│   ├── arduino_to_udp.py         # serial to UDP bridge
 │   └── requirements.txt
 ├── Unity/
-│   ├── Assets/
+│   ├── Assets/                   # scene, scripts, hand model
 │   ├── Packages/
 │   └── ProjectSettings/
 ├── Documentation/
@@ -53,122 +211,10 @@ ASL-Translator/
 └── README.md
 ```
 
-Unity's `Library/`, `Temp/`, `Logs/`, `Obj/`, `Build/`, `Builds/`, and `UserSettings/` folders are generated or machine-specific and are excluded. Keep `Assets` `.meta` files, `Packages/manifest.json`, `Packages/packages-lock.json`, and all of `ProjectSettings/`.
+Unity's generated folders (`Library/`, `Temp/`, `Logs/`, `Obj/`, `Build/`, `Builds/`, `UserSettings/`) are git-ignored. Keep every `.meta` file, `Packages/manifest.json`, `Packages/packages-lock.json` and all of `ProjectSettings/` committed, or Unity will break.
 
-## Requirements
+For the full audit behind the limitations above, see [Inspection-Findings.md](Documentation/Inspection-Findings.md).
 
-- ESP32 development board supported by the Arduino IDE.
-- MPU9250 IMU.
-- Ten flex sensors and the fixed resistors listed in [hardware documentation](Documentation/Hardware-and-Dependencies.md).
-- USB data cable and a serial port.
-- Python 3.
-- Unity Editor **6000.6.2f1** (recorded project version).
-- Windows is required by the current `WindowsTTS.cs` / `System.Speech` implementation.
+## License
 
-## Setup
-
-### 1. Arduino
-
-1. Open `Arduino/sketch_feb1a.ino` in Arduino IDE.
-2. Install an Arduino library that provides `MadgwickAHRS.h` and the `Madgwick` API used by the sketch. The exact library package/version was not recorded in the recovered project; see [dependencies](Arduino/DEPENDENCIES.md).
-3. Select the correct ESP32 board and its USB serial port.
-4. Upload the sketch.
-5. Confirm the serial monitor is set to `115200` baud. Close the serial monitor before starting Python because a serial port generally cannot be opened by both programs simultaneously.
-
-### 2. Python bridge
-
-From the repository root, create and activate a virtual environment, then install the dependency:
-
-```bash
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
-
-python -m pip install -r Python/requirements.txt
-```
-
-Edit `Python/arduino_to_udp.py` and change `SERIAL_PORT = "COM5"` to the ESP32's actual serial port. The baud rate must remain `115200`; the UDP destination is `127.0.0.1:5005`.
-
-Run:
-
-```bash
-python Python/arduino_to_udp.py
-```
-
-### 3. Unity
-
-1. Open Unity Hub.
-2. Add the `Unity/` directory as an existing project.
-3. Use Unity Editor `6000.6.2f1`.
-4. Open `Assets/Scenes/SampleScene.unity`.
-5. Allow Unity to regenerate `Library/` and import assets/packages.
-6. Enter Play mode. The scene's `HandUDPReceiver` listens on UDP port `5005`.
-
-The receiver binds to the local port when the scene starts. Start Unity before the Python bridge so the listener is ready before packets arrive.
-
-### 4. Runtime controls
-
-| Key | Action |
-|---|---|
-| `C` | Calibrate current IMU wrist pose as neutral |
-| `Q` | Start letter accumulation |
-| `E` | Stop letter accumulation |
-| `W`, `A`, `S`, `D` | Move the camera |
-| Right mouse button | Look around |
-| Left Shift | Move faster |
-
-The visible `startBtn` and `stopBtn` UI buttons in the recovered scene have empty `OnClick` event lists. The working start/stop controls in the recovered code are keyboard keys `Q` and `E`.
-
-## Communication protocol
-
-Each serial line and UDP datagram contains 14 comma-separated decimal values:
-
-```text
-q0,q1,q2,q3,thumbMCP,thumbPIP,indexMCP,indexPIP,middleMCP,middlePIP,ringMCP,ringPIP,pinkyMCP,pinkyPIP
-```
-
-- `q0`–`q3`: Madgwick quaternion values.
-- Remaining ten values: calculated flex-sensor resistances in ohms, not raw ADC counts.
-- Serial: `115200` baud, newline-terminated.
-- UDP: IPv4 loopback `127.0.0.1`, destination port `5005`.
-
-The Unity receiver constructs `Quaternion(q1, q2, q3, q0)` and then reorders its components again as `Quaternion(raw.y, raw.x, raw.z, raw.w)`. Preserve this behavior unless the IMU coordinate mapping is deliberately recalibrated and tested.
-
-## Important recovered-code limitations
-
-- Thumb sensor fields 4 and 5 are emitted by Arduino, but the corresponding two `ApplyFingerAngle` calls in `HandUDPReceiver.cs` are commented out. Unity's thumb angle fields therefore are not driven by the glove in the recovered implementation.
-- The ASL classifier depends on thumb states for several letters, so those classifications cannot work as intended from live glove data until thumb mapping is restored and calibrated.
-- `ASLTranslator.cs` contains identical predicates for C and O, H and U, and R and V. Because the first matching condition returns, O, U, and V are unreachable through those duplicated pairs.
-- J and Z are not implemented. The classifier uses static finger-angle thresholds rather than motion sequences.
-- `ASLTranslator.Update()` logs recognition continuously, even when the UI's translation mode is stopped.
-- `ASLUIController` only appends a letter when it differs from the previous detected letter. `lastLetter` is not reset when the hand returns to an unrecognized pose or when translation restarts, so repeated identical letters cannot be appended consecutively.
-- The UI start/stop buttons have no configured click handlers; use `Q` and `E`.
-- The IMU filter is initialized with `filter.begin(50)`, while the main loop delays 10 ms (nominally about 100 Hz). The declared filter rate and loop rate do not match.
-- UDP receive and Unity object field updates occur on a background thread. The receiver suppresses all exceptions, making runtime faults difficult to diagnose.
-- The Python bridge is hard-coded to `COM5`, does not validate the 14-field packet, and does not implement serial reconnection.
-- `WindowsTTS.cs` uses `System.Speech.Synthesis`; it is Windows-specific in practice. Its `Speak` method is not called by the recovered ASL UI code.
-- The project includes `Assets/System.Speech.dll`. Verify its provenance and redistribution terms before publishing.
-- The ZIP contains no recovered circuit diagram or project screenshots. Do not imply those assets are included.
-
-See [inspection findings](Documentation/Inspection-Findings.md) before presenting the project as fully functional.
-
-## Reproducibility and verification
-
-The source tree and scene references were inspected from the recovered archive. The Unity project was not launched in the Unity Editor, the C# scripts were not compiled in this environment, and the hardware pipeline was not physically tested. A clean Unity import and an end-to-end test with the actual glove are still required.
-
-A useful validation sequence is:
-
-1. Verify each flex channel's resistance changes when bent.
-2. Verify the ESP32 emits exactly 14 numeric fields per line at 115200 baud.
-3. Verify the Python bridge opens the correct serial port and forwards packets to UDP port 5005.
-4. Verify Unity receives datagrams and the wrist/finger values change.
-5. Restore and calibrate thumb control, correct duplicate classifier rules, and test each supported handshape.
-6. Confirm the UI and speech behavior on the intended Windows machine.
-
-## License and third-party assets
-
-The recovered project contains imported hand-model files, TextMesh Pro resources, and a `System.Speech.dll` binary. Their original licenses/provenance were not established from the archive. The included `LICENSE` file therefore records that no blanket reuse permission is granted. Replace it with a deliberate license only after verifying ownership and third-party asset terms.
-#   A S L - I n t e r p r e t e r  
- 
+**No open-source license has been chosen yet**, so no permission to reuse the project is granted. The repo includes third-party material whose terms haven't been verified: the 3D hand model, TextMesh Pro resources, and `Assets/System.Speech.dll`. Check their provenance before choosing a license, and keep separate notices for third-party parts. See [LICENSE](LICENSE).
