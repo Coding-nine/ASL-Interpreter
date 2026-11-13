@@ -1,0 +1,13 @@
+License status
+
+No open-source license has been selected for this recovered repository.
+
+No blanket permission is granted by this notice to copy, modify, distribute, or reuse the repository. Original project code and third-party components may have different rights holders and terms.
+
+Before publishing with a permissive license, verify the provenance and license terms for at least:
+- the hand model and its textures/source formats under Unity/Assets;
+- Assets/System.Speech.dll;
+- TextMesh Pro resources and fonts;
+- any other imported assets.
+
+After confirming ownership and third-party terms, replace this notice with the license you intend to grant for the original project materials, and retain separate notices for third-party components.

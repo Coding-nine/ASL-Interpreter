@@ -1,0 +1,49 @@
+# Unity generated/cache data
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]serSettings/
+[Mm]emoryCaptures/
+[Bb]uild/
+[Bb]uilds/
+[Oo]utput/
+[Tt]est[Rr]esults/
+
+# Unity / IDE generated project files
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.slnx
+*.user
+*.suo
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS/editor clutter
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
